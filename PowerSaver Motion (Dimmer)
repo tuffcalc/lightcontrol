@@ -1,0 +1,126 @@
+/**
+ *  Turn light on with motion for x minutes if it is dark based on light sensor
+ *
+ *   Written by tuffcalc
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ *  in compliance with the License. You may obtain a copy of the License at:
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software distributed under the License is distributed
+ *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
+ *  for the specific language governing permissions and limitations under the License.
+ *
+ */
+
+definition(
+    name: "PowerSaver Motion (Dimmer)",
+    namespace: "tuffcalc",
+    author: "tuffcalc",
+    description: "Turn dimmer off after motion stops (PowerSave)",
+    category: "My Apps",
+    iconUrl: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience.png",  
+    iconX2Url: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience@2x.png",
+    iconX3Url: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience@2x.png")
+    //todo:  replace icon with something appropriate.  
+
+
+preferences {
+	section("Select motion sensor(s) you want to use (Optional)") {
+        input "motions", "capability.motionSensor", title: "Motion Detector", required: true, multiple: true
+	}
+        section("Select dimmers you want to use (Required)") {
+        input "switches", "capability.switchLevel", title: "Dimmer Switches", required: true, multiple: true
+	}
+    section ("Set levels & delays:") {
+        input "DelayMinStr", "number", title: "Turn lights off after how many minutes when motion stops", required: true           
+        	}
+
+}
+def installed() {
+	log.debug "POWERSAVE Dimmer ... installed with settings: ${settings}"
+
+	initialize()
+}
+
+def updated() {
+	log.debug "POWERSAVE Dimmer ... updated with settings: ${settings}"
+
+	unsubscribe()
+	initialize()
+}
+
+def initialize() {
+	log.debug "initialize()"
+    unsubscribe()
+
+    state.DelayMin = DelayMinStr
+
+    subscribe(motions, "motion.active", handleMotionEvent)
+    subscribe(motions, "motion.inactive", handleEndMotionEvent)
+
+    subscribe(location, "mode", modeChangeHandler)
+    
+		runIn((60*60), turnLightsOff)
+        log.debug "POWERSAVE Dimmer ... initialize complete, setting lights off (in 60 minute(s)) ..."
+    
+
+}
+
+///// end of subscriptions
+
+
+
+def handleMotionEvent(evt) {
+	log.debug "POWERSAVE Dimmer ... <<< motion detected >>> ..."
+	
+    unschedule(turnLightsOff) }
+
+def handleEndMotionEvent(evt) {
+	
+    log.debug "POWERSAVE Dimmer ... >>> motion stopped <<< ..."
+    
+    unschedule(turnLightsOff)
+    
+    def motionState = motions.currentMotion
+	
+    log.debug "POWERSAVE Dimmer ... motion sensor(s) state: $motionState ..."
+	
+    if (motionState.contains("active")) {
+
+        log.debug "POWERSAVE Dimmer ... motion still detected at one or more sensors, so doing nothing ..."
+     
+  	  } else {
+    	runIn((state.DelayMin*60), turnLightsOff)
+        log.debug "POWERSAVE Dimmer ... no motion at any sensor, turning lights off (in $state.DelayMin minute(s)) ..."
+       }
+        
+	 }
+    
+
+def turnLightsOff() {   
+	
+    unschedule(turnLightsOff)
+
+	log.debug "POWERSAVE Dimmer ... turing lights off via turnLightsOff() ..." 
+	
+   
+    switches?.setLevel(0)
+}
+
+
+
+def modeChangeHandler(evt) {
+	
+	log.debug "POWERSAVE Dimmer ... mode changed, running initialize()"
+    initialize()
+
+//    	log.debug "... mode changed ... (state.lightIsOn=false, state.LuxOverSetpoint=false, runIn(600), turnLightsOff) ..."
+
+//    	state.lightIsOn=false
+//      state.LuxOverSetpoint=false
+
+//        runIn(600, turnLightsOff)
+
+}
