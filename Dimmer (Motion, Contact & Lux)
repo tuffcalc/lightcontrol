@@ -1,0 +1,298 @@
+/**
+ *  Turn light on with motion for x minutes if it is dark based on light sensor
+ *
+ *   Written by Nick Koutsoukis
+ *
+ *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+ *  in compliance with the License. You may obtain a copy of the License at:
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing, software distributed under the License is distributed
+ *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
+ *  for the specific language governing permissions and limitations under the License.
+ *
+ */
+
+definition(
+    name: "Dimmer (Motion, Contact & Lux)",
+    namespace: "tuffcalc",
+    author: "tuffcalc",
+    description: "Turn on lights temporarily when there is motion but only if it is dark according to light sensor, turn light off if above lux setpoint.",
+    category: "My Apps",
+    iconUrl: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience.png",  
+    iconX2Url: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience@2x.png",
+    iconX3Url: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience@2x.png")
+    //todo:  replace icon with something appropriate.  
+
+
+preferences {
+	section("Select motion sensor(s) you want to use (Optional)") {
+        input "motions", "capability.motionSensor", title: "Motion Detector", required: false, multiple: true
+	}
+    section("Select contact sensor(s) you want to use (Optional)") {
+        input "contacts", "capability.contactSensor", title: "Contact Sensor", required: false, multiple: true
+        }
+    section("Select dimmers you want to use (Required)") {
+        input "switches", "capability.switchLevel", title: "Dimmer Switches", required: true, multiple: true
+	}
+    section ("Set levels & delays:") {
+
+        input "BrightLevelStr", "number", title: "Motion-sensed light level %", required: true
+
+        input "DelayMinStr", "number", title: "Turn lights off after how many minutes when motion stops (Optional)", required: false
+            
+            input "DelayMinStr2", "number", title: "Turn lights off after how many minutes when contact closes (Optional)", required: false
+            
+        	}
+    section ("Ignore motion if lux is above this value (Optional)") {
+    	input "LightMeter", "capability.illuminanceMeasurement", title: "Light Meters", required: false, multiple: false
+		input "LuxSetPointStr", "number", title: "Lux level", required: false
+           	}
+
+// start light meter on code
+	section ("Turn lights off on lux event if lux is above this value (Optional)") {
+    	input "LuxSetPoint1Str", "number", title: "Lux level", required: false
+            
+             input "DelayMinStr1", "number", title: "Light on delay for how long after lux event off (Optional)", required: false
+            
+           	}         
+// end light meter on code
+}
+def installed() {
+	log.debug "Installed with settings: ${settings}"
+
+	initialize()
+}
+
+def updated() {
+	log.debug "Updated with settings: ${settings}"
+
+	unsubscribe()
+	initialize()
+}
+
+def initialize() {
+	log.debug "initialize()"
+    unsubscribe()
+
+    state.BrightLevel = BrightLevelStr as Integer
+   	if (state.BrightLevel == 100) {
+    	state.BrightLevel = 99
+    }
+    
+    state.DelayMin = DelayMinStr
+    state.DelayMin1 = DelayMinStr1
+    state.DelayMin2 = DelayMinStr2
+    state.LuxSetPoint = LuxSetPointStr
+	state.LuxSetPoint1 = LuxSetPoint1Str
+    
+    state.LuxOverSetpoint=false
+    state.lightIsOn=false
+
+    subscribe(motions, "motion.active", handleMotionEvent)
+    subscribe(motions, "motion.inactive", handleEndMotionEvent)
+    subscribe(contacts, "contact.open", contactopen)
+    subscribe(contacts, "contact.closed", contactclosed)
+    subscribe(location, "mode", modeChangeHandler)
+    subscribe(LightMeter, "illuminance", LuxChange)
+    
+		runIn((10*60), turnLightsOff)
+        log.debug "... initialize complete, setting lights off (in 10 minute(s)) ..."
+    
+
+}
+
+///// end of subscriptions
+
+
+def LuxChange(evt) {
+log.debug "... Lux levels have changed ..."
+
+def currentLux1=LightMeter.currentIlluminance
+
+log.debug "... current Lux is ($currentLux1) ..."
+
+        if(state.LuxSetPoint1 == null) {
+        	log.debug "... luxmeter not used, so doing nothing ..." 
+        }
+        
+            else {
+        	if(state.lightIsOn == false) {
+            log.debug "... lights already in OFF state, so doing nothing ..."
+            }
+            
+             else {
+        	if(state.LuxOverSetpoint == true) {
+            log.debug "... lights already turned OFF due to Lux over setpoint, so doing nothing ..."
+            }
+                         
+        else {
+        	log.debug "... current Lux: ($currentLux1), Lux_Over_Setpoint: ($state.LuxSetPoint1) ..."
+            if(currentLux1 > state.LuxSetPoint1) {
+        	log.debug "... it is too bright in the room (lux: ($currentLux1)) , so turning lights OFF ..."
+            
+            turnLightsOffLux()
+        	
+        }
+        
+         else {
+        	log.debug "... current Lux ($currentLux1) below required Lux_Over_Setpoint ($state.LuxSetPoint1), so doing nothing ..."
+
+        }}}}
+
+
+
+// end lightmeter subscription
+}
+
+def contactopen(evt) {
+log.debug "... contact has been opened - dumping to handleMotionEvent() ..."
+handleMotionEvent()
+}
+
+def contactclosed(evt) {
+log.debug " ... >>> contact closed <<< ..."
+log.debug " ... turning switches OFF after contact close delay (in $state.DelayMin2 minute(s)) ..."
+
+    runIn((state.DelayMin2*60), turnLightsOff)
+    
+}
+
+def handleMotionEvent(evt) {
+	log.debug "... <<< motion detected >>> ..."
+	
+    unschedule(turnLightsOff)
+        
+//	runIn(86400, turnLightsOff, [overwrite: true])
+//    unschedule(turnLightsOff)
+//    log.debug "Stopping OFF timer."
+    
+    if (state.lightIsOn) {
+        log.debug "... light state is ON, doing nothing ..."
+        }
+        
+    else {
+    
+     if (state.LuxOverSetpoint) {
+        log.debug "... lights previously turned off due to lux over setpoint, still in timer delay ..."
+        }
+        
+    else {
+    
+//    def currentLux=LightMeter.currentIlluminance
+    
+     if(state.LuxSetPoint1 == null) {
+        	log.debug "... luxmeter not used, so not checking lux values ..." 
+            log.debug "... turning lights ON ..."
+            
+            switches?.setLevel(state.BrightLevel)
+        	state.lightIsOn=true
+            state.LuxOverSetpoint=false
+        	
+        }
+        
+        else {
+        
+        def currentLux=LightMeter.currentIlluminance
+        log.debug "... current Lux: ($currentLux) ..."
+        
+        
+        if(currentLux < state.LuxSetPoint) {
+        	log.debug "... ($currentLux) < ($state.LuxSetPoint), turning lights ON ..."
+            switches?.setLevel(state.BrightLevel)
+        	state.lightIsOn=true
+            state.LuxOverSetpoint=false
+        	
+        }
+        
+        else {
+        	log.debug "... ($currentLux) > ($state.LuxSetPoint), so doing nothing ..."
+        
+	
+}}}}}
+
+def handleEndMotionEvent(evt) {
+	
+    log.debug "... >>> motion stopped <<< ..."
+    
+    unschedule(turnLightsOff)
+    
+    def motionState = motions.currentMotion
+	
+    log.debug "... motion sensor(s) state: $motionState ..."
+	
+    if (motionState.contains("active")) {
+//		unschedule(turnLightsOff)
+//      runIn(86400, turnLightsOff, [overwrite: true])
+//		unschedule(turnLightsOff)
+
+        log.debug "... motion still detected at one or more sensors, so doing nothing ..."
+     
+  	  } else {
+   		 	  if (state.lightIsOn) {
+    	runIn((state.DelayMin*60), turnLightsOff)
+        log.debug "... no motion at any sensor, turning lights off (in $state.DelayMin minute(s)) ..."
+       }
+       
+       else {
+   		 	
+        log.debug "... state.lightIsOn=false, doing nothing ..."
+        
+	  }}
+    
+    
+}
+
+def changeluxstate() {
+
+unschedule(changeluxstate)
+
+state.LuxOverSetpoint=false
+state.lightIsOn=false
+
+log.debug "... LuxOverSetpoint delay timer ended, setting LuxOverSetpoint=false ..."
+}
+
+def turnLightsOff() {   
+	
+    unschedule(turnLightsOff)
+
+	log.debug "... turing lights off via turnLightsOff() ..." 
+	
+   
+    switches?.setLevel(0)
+    state.lightIsOn=false
+    state.LuxOverSetpoint=false
+}
+
+def turnLightsOffLux() {   
+
+	unschedule(turnLightsOff)
+	
+    log.debug "... turning lights off via turnLightsOffLux() ..." 
+	
+    switches?.setLevel(0)
+    state.lightIsOn=false
+    state.LuxOverSetpoint=true
+    runIn((state.DelayMin1*60), changeluxstate)
+
+}
+
+
+def modeChangeHandler(evt) {
+
+// log.debug "... mode changed, turning lights off in 10 minutes."
+// runIn(600, turnLightsOff)
+
+	log.debug "... mode changed, running initialize()"
+    initialize()
+
+//    	log.debug "... mode changed ... (state.lightIsOn=false, state.LuxOverSetpoint=false, runIn(600), turnLightsOff) ..."
+
+//    	state.lightIsOn=false
+//        state.LuxOverSetpoint=false
+
+//        runIn(600, turnLightsOff)
+
+}
